@@ -13,7 +13,7 @@ resource 'PiPL' (16000) {
 		},
 		/* [2] */
 		Name {
-			"BTS Overlay"
+			"Gizmo"
 		},
 		/* [3] */
 		Category {

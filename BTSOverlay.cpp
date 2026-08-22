@@ -161,6 +161,17 @@ ParamsSetup (PF_InData *in_data, PF_OutData *out_data, PF_ParamDef *params[], PF
 	PF_ADD_POPUP(	STR(StrID_View_Param_Name), 2, BTS_VIEW_FINAL,
 					STR(StrID_View_Choices), VIEW_DISK_ID);
 
+	// Transform warning. A read-only status line, not a control: permanently
+	// DISABLED so nobody can click it, and INVISIBLE until UpdateParamsUI finds
+	// our host layer transformed. It is a checkbox purely because a checkbox is
+	// the one param type that carries a second, long text string (the comment
+	// beside the box) - the name field caps at 31 characters, too short for an
+	// instruction. Nothing ever reads its value.
+	AEFX_CLR_STRUCT(def);
+	def.ui_flags = PF_PUI_DISABLED | PF_PUI_INVISIBLE;
+	PF_ADD_CHECKBOX(STR(StrID_Warn_Param_Name), STR(StrID_Warn_Comment),
+					FALSE, 0, WARN_DISK_ID);
+
 	// The old three-way Output popup split into two checkboxes, because it was
 	// really two independent questions: do we draw overlays at all (the A/B
 	// compare you reach for constantly, now one click), and do we keep the
@@ -376,6 +387,123 @@ BTS_GetContext (PF_InData *in_data, AEGP_CompH *compP, A_long *myIdxP, A_long *n
 		if (!err && numP && compH) ERR(suites.LayerSuite9()->AEGP_GetCompNumLayers(compH, numP));
 	}
 	return err;
+}
+
+/* =========================================================================
+   Transform guard.
+
+   Every gizmo is computed in COMP space and written straight into our output
+   buffer, on the assumption that our own layer maps 1:1 onto the comp. That
+   holds for a freshly created, comp-sized adjustment layer and stops holding
+   the moment anyone nudges it: AE applies the LAYER transform AFTER the effect
+   renders, so a moved / scaled / rotated / parented host layer drags every
+   overlay off the thing it annotates - while the composite underneath, which
+   the same transform also moves, still looks plausible. That silent mismatch
+   is why this is a hard stop with a visible warning rather than a best-effort
+   correction: there is no correction to make from inside the effect.
+   ========================================================================= */
+
+// One transform stream evaluated at `t`. Returns FALSE (outputs untouched) when
+// the stream cannot be read - callers pre-seed the outputs with the DEFAULT, so
+// an unreadable stream degrades to "fine" and never raises a false alarm. That
+// matters for the 3D-only streams, which simply do not exist on a 2D layer.
+static A_Boolean
+BTS_ReadXformStream (AEGP_SuiteHandler &suites, AEGP_LayerH layerH,
+                     AEGP_LayerStream which, const A_Time *t,
+                     PF_FpLong *x, PF_FpLong *y, PF_FpLong *z)
+{
+	AEGP_StreamRefH streamH = NULL;
+	if (suites.StreamSuite6()->AEGP_GetNewLayerStream(S_bts_id, layerH, which, &streamH) != PF_Err_NONE || !streamH)
+		return FALSE;
+
+	AEGP_StreamValue2 sv;  AEFX_CLR_STRUCT(sv);
+	A_Boolean ok = (suites.StreamSuite6()->AEGP_GetNewStreamValue(
+						S_bts_id, streamH, AEGP_LTimeMode_CompTime, t, FALSE, &sv) == PF_Err_NONE);
+	if (ok) {
+		if (x) *x = sv.val.three_d.x;
+		if (y) *y = sv.val.three_d.y;
+		if (z) *z = sv.val.three_d.z;
+		suites.StreamSuite6()->AEGP_DisposeStreamValue(&sv);
+	}
+	suites.StreamSuite6()->AEGP_DisposeStream(streamH);
+	return ok;
+}
+
+static A_Boolean BTS_Near (PF_FpLong a, PF_FpLong b, PF_FpLong tol)
+{ PF_FpLong d = a - b; return (d < 0 ? -d : d) <= tol; }
+
+/* TRUE when our own layer is the pass-through the overlay math assumes:
+   unparented, comp-sized, and sitting at the identity transform. Evaluated at
+   the CURRENT time, so an ANIMATED transform is caught on exactly the frames
+   where it is actually off - which is the honest answer per frame.
+
+   Anything unreadable counts as fine. A guard that fires spuriously would be
+   worse than one that occasionally misses, because it blanks the render. */
+static A_Boolean
+BTS_XformIsDefault (PF_InData *in_data)
+{
+	AEGP_SuiteHandler	suites(in_data->pica_basicP);
+	AEGP_LayerH			meLayer = NULL;
+	AEGP_CompH			compH   = NULL;
+
+	if (suites.PFInterfaceSuite1()->AEGP_GetEffectLayer(in_data->effect_ref, &meLayer) != PF_Err_NONE || !meLayer)
+		return TRUE;
+
+	// Parenting alone is disqualifying: the parent's transform reaches us the
+	// same way our own does, and it is the case people hit by accident.
+	AEGP_LayerH parentH = NULL;
+	if (suites.LayerSuite9()->AEGP_GetLayerParent(meLayer, &parentH) == PF_Err_NONE && parentH)
+		return FALSE;
+
+	if (suites.LayerSuite9()->AEGP_GetLayerParentComp(meLayer, &compH) != PF_Err_NONE || !compH)
+		return TRUE;
+
+	// Comp size, and our source's size. A comp-sized adjustment layer defaults
+	// to Position = comp centre and Anchor Point = its own centre; a layer that
+	// is not comp-sized cannot cover the frame no matter where it sits.
+	A_long compW = 0, compH_px = 0, layW = 0, layH = 0;
+	AEGP_ItemH compItemH = NULL, srcItemH = NULL;
+	if (suites.CompSuite12()->AEGP_GetItemFromComp(compH, &compItemH) != PF_Err_NONE || !compItemH)
+		return TRUE;
+	if (suites.ItemSuite9()->AEGP_GetItemDimensions(compItemH, &compW, &compH_px) != PF_Err_NONE)
+		return TRUE;
+	if (suites.LayerSuite9()->AEGP_GetLayerSourceItem(meLayer, &srcItemH) == PF_Err_NONE && srcItemH)
+		suites.ItemSuite9()->AEGP_GetItemDimensions(srcItemH, &layW, &layH);
+	if (layW > 0 && layH > 0 && (layW != compW || layH != compH_px))
+		return FALSE;
+
+	A_Time t;  t.value = in_data->current_time;  t.scale = in_data->time_scale;
+
+	// Each stream is pre-seeded with its default, so a failed read reads clean.
+	PF_FpLong px = compW / 2.0, py = compH_px / 2.0, pz = 0.0;
+	PF_FpLong ax = (layW ? layW : compW) / 2.0, ay = (layH ? layH : compH_px) / 2.0, az = 0.0;
+	PF_FpLong sx = 100.0, sy = 100.0, sz = 100.0;
+	PF_FpLong rz = 0.0, rx = 0.0, ry = 0.0, ox = 0.0, oy = 0.0, oz = 0.0;
+
+	BTS_ReadXformStream(suites, meLayer, AEGP_LayerStream_POSITION,    &t, &px, &py, &pz);
+	BTS_ReadXformStream(suites, meLayer, AEGP_LayerStream_ANCHORPOINT, &t, &ax, &ay, &az);
+	BTS_ReadXformStream(suites, meLayer, AEGP_LayerStream_SCALE,       &t, &sx, &sy, &sz);
+	BTS_ReadXformStream(suites, meLayer, AEGP_LayerStream_ROTATE_Z,    &t, &rz, NULL, NULL);
+	BTS_ReadXformStream(suites, meLayer, AEGP_LayerStream_ROTATE_X,    &t, &rx, NULL, NULL);
+	BTS_ReadXformStream(suites, meLayer, AEGP_LayerStream_ROTATE_Y,    &t, &ry, NULL, NULL);
+	BTS_ReadXformStream(suites, meLayer, AEGP_LayerStream_ORIENTATION, &t, &ox, &oy, &oz);
+
+	// Sub-pixel slop only. Half a pixel of drift is already visible against a
+	// 1px-wide motion path, which is the whole point of the overlay.
+	const PF_FpLong kPos = 0.01, kSca = 0.01, kRot = 0.001;
+	if (!BTS_Near(px, compW / 2.0, kPos) || !BTS_Near(py, compH_px / 2.0, kPos) || !BTS_Near(pz, 0.0, kPos))
+		return FALSE;
+	if (!BTS_Near(ax, (layW ? layW : compW) / 2.0, kPos) ||
+		!BTS_Near(ay, (layH ? layH : compH_px) / 2.0, kPos) || !BTS_Near(az, 0.0, kPos))
+		return FALSE;
+	if (!BTS_Near(sx, 100.0, kSca) || !BTS_Near(sy, 100.0, kSca) || !BTS_Near(sz, 100.0, kSca))
+		return FALSE;
+	if (!BTS_Near(rz, 0.0, kRot) || !BTS_Near(rx, 0.0, kRot) || !BTS_Near(ry, 0.0, kRot))
+		return FALSE;
+	if (!BTS_Near(ox, 0.0, kRot) || !BTS_Near(oy, 0.0, kRot) || !BTS_Near(oz, 0.0, kRot))
+		return FALSE;
+
+	return TRUE;
 }
 
 /* =========================================================================
@@ -1668,6 +1796,25 @@ BTS_SetEnabled (PF_InData *in_data, PF_ParamDef *params[], A_long idx, A_Boolean
 	return err;
 }
 
+// Show or hide a param outright. Same shape as BTS_SetEnabled - and the same
+// early-out, because PF_UpdateParamUI on an unchanged param still costs a
+// round trip and UpdateParamsUI runs on every param tweak.
+static PF_Err
+BTS_SetVisible (PF_InData *in_data, PF_ParamDef *params[], A_long idx, A_Boolean on)
+{
+	PF_Err				err = PF_Err_NONE;
+	AEGP_SuiteHandler	suites(in_data->pica_basicP);
+
+	A_Boolean hiddenNow = (params[idx]->ui_flags & PF_PUI_INVISIBLE) != 0;
+	if (hiddenNow == !on) return PF_Err_NONE;
+
+	if (on) params[idx]->ui_flags &= ~PF_PUI_INVISIBLE;
+	else    params[idx]->ui_flags |=  PF_PUI_INVISIBLE;
+
+	ERR(suites.ParamUtilsSuite3()->PF_UpdateParamUI(in_data->effect_ref, idx, params[idx]));
+	return err;
+}
+
 static PF_Err
 UpdateParamsUI (PF_InData *in_data, PF_OutData *out_data, PF_ParamDef *params[])
 {
@@ -1690,6 +1837,11 @@ UpdateParamsUI (PF_InData *in_data, PF_OutData *out_data, PF_ParamDef *params[])
 	// picker is live only when its own source is selected AND its gizmo is on.
 	A_Boolean perGizmo = draws && (colSrc == BTS_COLSRC_GIZMO);
 	A_Boolean byType   = draws && (colSrc == BTS_COLSRC_TYPE);
+
+	// The transform warning appears only when it applies. UpdateParamsUI is the
+	// main thread, which is where AEGP reads belong; PreRender does the same
+	// check independently for the render itself.
+	ERR(BTS_SetVisible(in_data, params, BTS_WARN, draws && !BTS_XformIsDefault(in_data)));
 
 	ERR(BTS_SetEnabled(in_data, params, BTS_OVERLAYS_ONLY, draws));
 	ERR(BTS_SetEnabled(in_data, params, BTS_COLOR_SOURCE,  draws));
@@ -2119,6 +2271,8 @@ PreRender (PF_InData *in_data, PF_OutData *out_data, PF_PreRenderExtra *extra)
 		infoP->downsampleY = (PF_FpLong)in_data->downsample_y.num / (PF_FpLong)in_data->downsample_y.den;
 		infoP->width       = in_result.max_result_rect.right  - in_result.max_result_rect.left;
 		infoP->height      = in_result.max_result_rect.bottom - in_result.max_result_rect.top;
+		infoP->inLeft      = in_result.result_rect.left;
+		infoP->inTop       = in_result.result_rect.top;
 
 		infoP->opacity     = op_p.u.fs_d.value / 100.0;
 		infoP->showMarkers = sm_p.u.bd.value;
@@ -2176,7 +2330,16 @@ PreRender (PF_InData *in_data, PF_OutData *out_data, PF_PreRenderExtra *extra)
 	// Nothing we could gather can reach a pixel when the effect is passing the
 	// clean input through, or when the master opacity is zero - SmartRender
 	// skips the whole draw in both cases. So skip the AEGP scene walk too.
-	if (infoP->outputMode == BTS_OUT_INPUT || infoP->opacity <= 0.0) {
+	// Transform guard. Checked BEFORE the early-out below so the warning still
+	// renders at zero opacity - the X is a diagnostic, not a gizmo, and having
+	// it silently vanish with the opacity slider would hide the very failure it
+	// exists to report. Only Show Overlays off suppresses it, because that mode
+	// promises the untouched composite.
+	infoP->xformBad = (infoP->outputMode != BTS_OUT_INPUT) && !BTS_XformIsDefault(in_data);
+
+	// A broken transform means every gizmo would land in the wrong place, so
+	// SmartRender draws the X instead of any of them - no point gathering.
+	if (infoP->outputMode == BTS_OUT_INPUT || infoP->opacity <= 0.0 || infoP->xformBad) {
 		suites.HandleSuite1()->host_unlock_handle(infoH);
 		return err;
 	}
@@ -2418,7 +2581,39 @@ SmartRender (PF_InData *in_data, PF_OutData *out_data, PF_SmartRenderExtra *extr
 				memset((char*)outputP->data + (size_t)yy * outputP->rowbytes, 0,
 					   (size_t)outputP->rowbytes);
 		} else {
-			ERR(suites.WorldTransformSuite1()->copy(in_data->effect_ref, inputP, outputP, NULL, NULL));
+			// PLACE the composite below - do not stretch it.
+			//
+			// copy() maps src_r onto dst_r and SCALES between them; the SDK's
+			// own Resizer sample resizes images with this exact call. So
+			// whole-world -> whole-world silently stretches whenever the two
+			// worlds differ in size, which is precisely what PreRender arranges
+			// when there is no full-frame background: the input shrinks to the
+			// bounds of whatever is actually visible below, while our output is
+			// widened to the full requested rect so the gizmos have a canvas.
+			// The result was the composite below blown up to fill the frame.
+			A_long dx = infoP->inLeft - in_data->output_origin_x;
+			A_long dy = infoP->inTop  - in_data->output_origin_y;
+
+			if (dx == 0 && dy == 0 &&
+				inputP->width == outputP->width && inputP->height == outputP->height) {
+				// Aligned and same size - the common case, and 1:1 either way.
+				ERR(suites.WorldTransformSuite1()->copy(in_data->effect_ref, inputP, outputP, NULL, NULL));
+			} else {
+				// Anything the input does not cover has to start transparent,
+				// otherwise it keeps whatever AE left in the buffer.
+				for (A_long yy = 0; yy < outputP->height; ++yy)
+					memset((char*)outputP->data + (size_t)yy * outputP->rowbytes, 0,
+						   (size_t)outputP->rowbytes);
+
+				// Same WIDTH and HEIGHT as the source, so copy() places instead
+				// of scaling. Off-buffer rects are clipped by AE.
+				PF_Rect dst;
+				dst.left   = dx;
+				dst.top    = dy;
+				dst.right  = dx + inputP->width;
+				dst.bottom = dy + inputP->height;
+				ERR(suites.WorldTransformSuite1()->copy(in_data->effect_ref, inputP, outputP, NULL, &dst));
+			}
 		}
 
 		// Overlay: anti-aliased gizmos via a coverage buffer, composited at the
@@ -2453,11 +2648,34 @@ SmartRender (PF_InData *in_data, PF_OutData *out_data, PF_SmartRenderExtra *extr
 		// Per Gizmo composites the whole group in one pass instead.
 		#define BTS_FLUSH_GROUP(R,G,B) do { if (infoP->colorSource == BTS_COLSRC_GIZMO) BTS_Composite(outputP, depth, &cbuf, (R), (G), (B), a); } while (0)
 
-		if (!err && infoP->outputMode != BTS_OUT_INPUT && a > 0.0f) {
+		// The X is drawn at its own fixed opacity, so it needs the coverage
+		// buffer even when the master opacity slider is at zero.
+		if (!err && infoP->outputMode != BTS_OUT_INPUT && (a > 0.0f || infoP->xformBad)) {
 			cbuf.CW = outputP->width; cbuf.CH = outputP->height; BTS_BoxReset(&cbuf.bb);
 			size_t nCov = (size_t)cbuf.CW * (size_t)cbuf.CH;
 			cbuf.cov = (float*)malloc(nCov * sizeof(float));
 			if (cbuf.cov) memset(cbuf.cov, 0, nCov * sizeof(float));
+		}
+
+		if (cbuf.cov && infoP->xformBad) {
+			// Host layer is transformed: a big red X plus a frame, covering the
+			// whole output. PreRender gathered no geometry in this state, so the
+			// gizmo blocks below all iterate zero times and this is the only
+			// thing that reaches a pixel.
+			//
+			// Deliberately NOT scaled by the master opacity - a warning the user
+			// can fade out is a warning they will miss. It is loud on purpose:
+			// the alternative is a render full of overlays that are quietly,
+			// plausibly, in the wrong place.
+			PF_FpLong W = (PF_FpLong)outputP->width - 1.0, H = (PF_FpLong)outputP->height - 1.0;
+			PF_FpLong half = BTS_ScaleF(8, dsx) * 0.5;
+			BTS_CovLine(&cbuf, 0, 0, W, H, half);
+			BTS_CovLine(&cbuf, W, 0, 0, H, half);
+			BTS_CovLine(&cbuf, 0, 0, W, 0, half);
+			BTS_CovLine(&cbuf, W, 0, W, H, half);
+			BTS_CovLine(&cbuf, W, H, 0, H, half);
+			BTS_CovLine(&cbuf, 0, H, 0, 0, half);
+			BTS_Composite(outputP, depth, &cbuf, 1.0f, 0.12f, 0.10f, 0.9f);
 		}
 
 		if (cbuf.cov) {

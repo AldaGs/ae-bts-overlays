@@ -126,6 +126,7 @@ typedef short int			int16;
 enum {
 	BTS_INPUT = 0,			// index 0 is always the input (composite-below)
 	BTS_VIEW,				// popup: Final | Debug Values
+	BTS_WARN,				// checkbox (always disabled): transform-broken warning
 	BTS_SHOW_OVERLAYS,		// checkbox: master A/B - off passes the clean input through
 	BTS_OVERLAYS_ONLY,		// checkbox: draw on transparency instead of the composite
 	BTS_OPACITY,			// master overlay opacity 0..100
@@ -249,6 +250,7 @@ enum {
 	COLOR_SOURCE_DISK_ID	= 63,
 	SHOW_PRIMS_DISK_ID	= 64,
 	COL_PRIMS_DISK_ID		= 65,
+	WARN_DISK_ID			= 66,
 };
 
 /* Per-render snapshot carried PreRender -> SmartRender via a PF_Handle.
@@ -261,11 +263,23 @@ enum {
 
 typedef struct BTSInfo {
 	A_long		viewMode;		// BTS_VIEW_FINAL / BTS_VIEW_DEBUG
+	/* The effect's own layer carries a transform we cannot honour: every gizmo
+	   is computed in COMP space and written straight into our output buffer, so
+	   AE then moves/scales/rotates the whole thing and the overlays no longer
+	   line up with the layers they annotate. Detected in PreRender; when set,
+	   SmartRender skips every gizmo and draws the big red X instead. */
+	A_Boolean	xformBad;
 	A_long		outputMode;	// BTS_OUT_*
 	PF_FpLong	downsampleX;	// in_data->downsample_x.num / .den
 	PF_FpLong	downsampleY;
 	A_long		width;			// input dims (pixels, at render res)
 	A_long		height;
+	/* Where the INPUT world sits in layer space. PreRender widens our output to
+	   the whole requested rect so the gizmos always have a canvas, but the input
+	   is only as big as the composite below actually covers - the two differ the
+	   moment there is no full-frame background. SmartRender needs the offset to
+	   PLACE those pixels rather than stretch them. */
+	A_long		inLeft, inTop;
 	// --- MVP style snapshot (from params, in PreRender) ----------------------
 	PF_FpLong	opacity;		// 0..1 master overlay opacity
 	A_Boolean	showMarkers;

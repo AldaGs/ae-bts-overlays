@@ -16,8 +16,8 @@ BEGIN
 	"MIB8",
 	"eman",
 	0, 0x0,
-	12, 0x0,
-	"\x0BBTS Overlay", 
+	8, 0x0,
+	"\x05Gizmo\0\0", 
 
 	"MIB8",
 	"gtac", 

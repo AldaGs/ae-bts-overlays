@@ -67,5 +67,7 @@ typedef enum {
 	StrID_Guides_Param_Name,
 	StrID_Locked_Param_Name,
 	StrID_Dump_Param_Name,
+	StrID_Warn_Param_Name,
+	StrID_Warn_Comment,
 	StrID_NUMTYPES
 } StrIDType;

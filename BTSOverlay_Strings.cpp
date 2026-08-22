@@ -7,7 +7,7 @@ typedef struct {
 
 TableString		g_strs[StrID_NUMTYPES] = {
 	StrID_NONE,					"",
-	StrID_Name,					"BTS Overlay",
+	StrID_Name,					"Gizmo",
 	StrID_Description,			"Draws behind-the-scenes production overlays (nulls + motion paths) onto the composite.\rApply to an adjustment layer at the top of the comp.",
 	StrID_View_Param_Name,			"View",
 	StrID_View_Choices,				"Final|Debug Values",
@@ -72,6 +72,8 @@ TableString		g_strs[StrID_NUMTYPES] = {
 	StrID_Guides_Param_Name,		"Include Guide Layers",
 	StrID_Locked_Param_Name,		"Include Locked Layers",
 	StrID_Dump_Param_Name,			"Dump Diagnostics",
+	StrID_Warn_Param_Name,			"! Transform",
+	StrID_Warn_Comment,				"This layer must have NO transform. Reset Position / Scale / Rotation / Anchor Point (and un-parent it) to continue.",
 };
 
 char	*GetStringPtr(int strNum)
