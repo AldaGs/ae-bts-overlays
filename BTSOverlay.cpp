@@ -2857,7 +2857,7 @@ PF_Err PluginDataEntryFunction2(
 	PF_Err result = PF_Err_INVALID_CALLBACK;
 	result = PF_REGISTER_EFFECT_EXT2(
 		inPtr, inPluginDataCallBackPtr,
-		"BTS Overlay", "aldai BTSOverlay", "Learning",
+		"Gizmo", "aldai BTSOverlay", "ags_utilities",
 		AE_RESERVED_INFO, "EffectMain", "https://www.adobe.com");
 	return result;
 }
