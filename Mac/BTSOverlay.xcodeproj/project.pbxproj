@@ -222,7 +222,7 @@
 				INFOPLIST_FILE = "BTSOverlay.plugin-Info.plist";
 				INSTALL_PATH = "$(HOME)/Library/Bundles";
 				PRODUCT_BUNDLE_IDENTIFIER = com.adobe.AfterEffects.BTSOverlay;
-				PRODUCT_NAME = BTSOverlay;
+				PRODUCT_NAME = "Gizmo-DEBUG";
 				SDKROOT = macosx;
 				ZERO_LINK = NO;
 			};

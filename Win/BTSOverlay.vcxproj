@@ -66,7 +66,7 @@
   <PropertyGroup Label="UserMacros" />
   <PropertyGroup>
     <_ProjectFileVersion>10.0.40219.1</_ProjectFileVersion>
-    <OutDir Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">$(AE_PLUGIN_BUILD_DIR)</OutDir>
+    <OutDir Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">$(AE_PLUGIN_BUILD_DIR)\</OutDir>
     <OutDir Condition="'$(Configuration)|$(Platform)'=='Release|x64'">$(AE_PLUGIN_BUILD_DIR)\</OutDir>
     <IntDir Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">$(Platform)\$(Configuration)\</IntDir>
     <IntDir Condition="'$(Configuration)|$(Platform)'=='Debug|ARM64'">$(Platform)\$(Configuration)\</IntDir>
@@ -76,7 +76,13 @@
     <IgnoreImportLibrary Condition="'$(Configuration)|$(Platform)'=='Debug|ARM64'">true</IgnoreImportLibrary>
     <IgnoreImportLibrary Condition="'$(Configuration)|$(Platform)'=='Release|x64'">true</IgnoreImportLibrary>
     <IgnoreImportLibrary Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'">true</IgnoreImportLibrary>
-    <TargetName>Gizmo</TargetName>
+    <!-- Debug links the debug CRT (vcruntime140d.dll, msvcp140d.dll), which ships
+         only with Visual Studio and is never present on a customer machine: such a
+         build fails to load with "cannot be applied because it cannot be initialized
+         (25 :: 3)". Naming the Debug output differently makes it impossible to hand
+         one to a customer by mistake. AE still loads it locally for testing. -->
+    <TargetName Condition="'$(Configuration)'=='Debug'">Gizmo-DEBUG</TargetName>
+    <TargetName Condition="'$(Configuration)'!='Debug'">Gizmo</TargetName>
     <TargetExt Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">.aex</TargetExt>
     <TargetExt Condition="'$(Configuration)|$(Platform)'=='Debug|ARM64'">.aex</TargetExt>
     <TargetExt Condition="'$(Configuration)|$(Platform)'=='Release|x64'">.aex</TargetExt>
