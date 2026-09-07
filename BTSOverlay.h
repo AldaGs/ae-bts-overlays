@@ -54,7 +54,7 @@ typedef short int			int16;
 #define	MINOR_VERSION	0
 #define	BUG_VERSION		0
 #define	STAGE_VERSION	PF_Stage_DEVELOP
-#define	BUILD_VERSION	1
+#define	BUILD_VERSION	2
 
 /* Dev-only UI. The View popup (dumps an intermediate buffer instead of the
    final frame) and the Dump Diagnostics button (writes the per-layer CSV) are

@@ -62,22 +62,32 @@ BTS_FetchLabelColors (PF_InData *in_data)
 {
 	AEGP_SuiteHandler	suites(in_data->pica_basicP);
 
-	for (A_long n = 0; n <= BTS_LABEL_COUNT; ++n) {
-		PF_App_Color c;  AEFX_CLR_STRUCT(c);
-		if (suites.AppSuite6()->PF_AppGetColor(
-				(PF_App_ColorType)(PF_App_Color_LABEL_0 + n), &c) == PF_Err_NONE) {
-			// PF_App_Color is a UI color: plain 16-bit shorts, full 0..65535
-			// range. It is NOT an AE pixel channel, whose white is
-			// PF_MAX_CHAN16 == 32768. Scaling by the pixel constant made every
-			// label color come out 2x too bright - which reads as washed-out
-			// super-white at 16/32 bpc and, because the 8-bit store truncates
-			// rather than clamps, as wrapped-around hues at 8 bpc.
-			S_labelCol[n][0] = BTS_clamp01((float)c.red   / 65535.0f);
-			S_labelCol[n][1] = BTS_clamp01((float)c.green / 65535.0f);
-			S_labelCol[n][2] = BTS_clamp01((float)c.blue  / 65535.0f);
+	// Never let a suite failure escape. This runs from GlobalSetup, where a
+	// thrown or returned error is fatal: AE aborts the load and shows the
+	// unhelpful "cannot be initialized" (25 :: 3) dialog. Losing the label
+	// colors is a cosmetic degradation; losing the effect is not.
+	try {
+		for (A_long n = 0; n <= BTS_LABEL_COUNT; ++n) {
+			PF_App_Color c;  AEFX_CLR_STRUCT(c);
+			if (suites.AppSuite6()->PF_AppGetColor(
+					(PF_App_ColorType)(PF_App_Color_LABEL_0 + n), &c) == PF_Err_NONE) {
+				// PF_App_Color is a UI color: plain 16-bit shorts, full 0..65535
+				// range. It is NOT an AE pixel channel, whose white is
+				// PF_MAX_CHAN16 == 32768. Scaling by the pixel constant made every
+				// label color come out 2x too bright - which reads as washed-out
+				// super-white at 16/32 bpc and, because the 8-bit store truncates
+				// rather than clamps, as wrapped-around hues at 8 bpc.
+				S_labelCol[n][0] = BTS_clamp01((float)c.red   / 65535.0f);
+				S_labelCol[n][1] = BTS_clamp01((float)c.green / 65535.0f);
+				S_labelCol[n][2] = BTS_clamp01((float)c.blue  / 65535.0f);
+			}
 		}
+		S_labelColValid = TRUE;
 	}
-	S_labelColValid = TRUE;
+	catch (...) {
+		// S_labelCol keeps what it had (zero-initialized on the first pass) and
+		// S_labelColValid stays FALSE, so PreRender retries later.
+	}
 }
 
 /* Human-readable kind names, indexed by BTS_LT_* (diagnostics CSV). */
@@ -142,8 +152,21 @@ GlobalSetup (PF_InData *in_data, PF_OutData *out_data, PF_ParamDef *params[], PF
 							PF_OutFlag2_FLOAT_COLOR_AWARE |
 							PF_OutFlag2_SUPPORTS_THREADED_RENDERING;
 
-	ERR(suites.UtilitySuite3()->AEGP_RegisterWithAEGP(NULL, STR(StrID_Name), &S_bts_id));
-	BTS_FetchLabelColors(in_data);		// main thread; refreshed in UpdateParamsUI
+	// Everything below here is best-effort. GlobalSetup runs during AE's
+	// startup plug-in scan, and ANY error returned from it makes AE refuse to
+	// load the effect outright ("cannot be initialized", 25 :: 3) instead of
+	// degrading. The AEGP id and the label-color snapshot are both
+	// nice-to-have - every AEGP call using S_bts_id already err-checks
+	// individually, and an id of 0 just makes them fail the same way - so
+	// swallow failures here and let the effect load.
+	try {
+		ERR(suites.UtilitySuite3()->AEGP_RegisterWithAEGP(NULL, STR(StrID_Name), &S_bts_id));
+		BTS_FetchLabelColors(in_data);	// main thread; refreshed in UpdateParamsUI
+	}
+	catch (...) {
+		S_bts_id = 0L;
+	}
+	err = PF_Err_NONE;
 	return err;
 }
 
